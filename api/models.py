@@ -15,9 +15,9 @@ class Video(models.Model):
     threshold_value = models.FloatField(null=True, blank=True)
     lang = models.CharField(max_length=50, null=True, blank=True)
     tone = models.CharField(max_length=50, null=True, blank=True)
-    lang_name = models.CharField(max_length=100, null=True, blank=True)
     voice_id = models.CharField(max_length=100, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    audio_file = models.FileField(upload_to=video_upload_to, null=True, blank=True)
 
     def __str__(self):
         return self.title
@@ -27,6 +27,7 @@ class Description(models.Model):
     description = models.TextField()
     start_at = models.DurationField()  # Usar DurationField para duración
     end_at = models.DurationField()    # Usar DurationField para duración
+    duration = models.DurationField()  # Usar DurationField para duración
     created_at = models.DateTimeField(auto_now_add=True)
     source = models.CharField(max_length=100, default='')
 
