@@ -2,6 +2,7 @@
 
 import api.models
 from django.db import migrations, models
+import videos.models
 
 
 class Migration(migrations.Migration):
@@ -19,6 +20,6 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='video',
             name='video_file',
-            field=models.FileField(upload_to=api.models.video_upload_to),
+            field=models.FileField(upload_to=videos.models.video_upload_to),
         ),
     ]

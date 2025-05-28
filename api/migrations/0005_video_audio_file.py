@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
             model_name="video",
             name="audio_file",
             field=models.FileField(
-                blank=True, null=True, upload_to=api.models.video_upload_to
+                blank=True, null=True, upload_to='videos/' 
             ),
         ),
     ]
