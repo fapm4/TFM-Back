@@ -3,6 +3,8 @@ import pyttsx3
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 import json
+import time
+import os
 
 engine = pyttsx3.init()
 
@@ -79,3 +81,9 @@ def text_to_speech(req, voice_id):
 		return JsonResponse({'error': str(e)}, status=500)
 	
 	return JsonResponse({'error': 'Invalid request'}, status=400)
+
+
+from gtts import gTTS
+def synthesize_description_to_audio(text, voice_id, filename, max_wait=5):
+	tts = gTTS(text=text, lang='es')
+	tts.save(filename)
