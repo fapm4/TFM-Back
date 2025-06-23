@@ -1,20 +1,19 @@
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-import os
 from django.conf import settings
 import subprocess
 from django.http import JsonResponse
 from datetime import timedelta
+import json
 import ffmpeg
 import re
 import json
-import av
-import torch
-import numpy as np
-import cv2
-from transformers import LlavaNextVideoProcessor, LlavaNextVideoForConditionalGeneration
-
+import os
 from tts.views import synthesize_description_to_audio
+import numpy as np
+
+## Mis paquetes
+from .silence_detection import extract_audio, detect_silences
 
 # model_id = "llava-hf/LLaVA-NeXT-Video-7B-hf"
 
@@ -56,13 +55,9 @@ def upload_file(req):
 				if threshold_selected == 'option5_thresh_manual':
 					threshold_value = req.POST.get('thresholdValue')
 
-				lang = None
-				tone = None
 				voice_id = None
 
 				if option_selected != 'option1_grabar':
-					lang = req.POST.get('idiomaSelected')
-					tone = req.POST.get('tonoSelected')
 					voice_id = req.POST.get('voice_id')
 				
 				new_video = Video(
@@ -71,8 +66,6 @@ def upload_file(req):
 					option_selected=option_selected,
 					threshold_selected=threshold_selected,
 					threshold_value=threshold_value,
-					lang=lang,
-					tone=tone,
 					voice_id=voice_id
 				)
 
@@ -85,88 +78,6 @@ def upload_file(req):
 		return JsonResponse({'error': str(e)}, status=500)
 	
 	return JsonResponse({'error': 'Invalid request'}, status=400)
-
-def extract_audio(video_path):
-	video_folder = os.path.dirname(video_path)
-	video_name = os.path.basename(video_path)
-	audio_name = os.path.splitext(video_name)[0] + '.mp3'
-	audio_path = os.path.join(video_folder, audio_name)
-
-	if os.path.exists(audio_path):
-		os.remove(audio_path)
-
-	input_file = ffmpeg.input(video_path)
-	input_file.output(audio_path).run(overwrite_output=True, quiet=True)
-
-	return audio_path
-
-def get_mean_volume(audio_path):
-	_, err = (
-		ffmpeg.input(audio_path)
-		.audio
-		.filter('volumedetect')
-		.output('null', f='null')
-		.run(capture_stdout=True, capture_stderr=True)
-	)
-
-	for line in err.decode().split('\n'):
-		if 'mean_volume:' in line:
-			mean_db = float(line.strip().split('mean_volume:')[1].replace(' dB', ''))
-			return mean_db
-		
-	return None
-
-def detect_silences(audio_path, threshold=None, max_attempts=5):
-	# Si no hay umbral, lo calculamos como media - 10
-	mean_db = get_mean_volume(audio_path)
-	if threshold is None:
-		threshold = mean_db - 10
-
-	threshold = float(threshold)
-
-	for attempt in range(0, max_attempts):
-		print(f"Intento {attempt + 1}: Threshold = {threshold} dB")
-
-		err, out = (
-			ffmpeg
-			.input(audio_path)
-			.filter('silencedetect', n=f'{threshold}dB', d=2)
-			.output('null', f='null')
-			.run(capture_stdout=True, capture_stderr=True)
-		)
-
-		if err:
-			print(f"Error: {err.decode()}")
-			# return [], threshold
-	
-		silence_lines = [
-			line for line in out.decode().splitlines()
-			if re.match(r'^\[silencedetect @', line)
-		]
-
-		if silence_lines:
-			# Procesar líneas detectadas
-			silence_periods = []
-			for i in range(0, len(silence_lines) - 1, 2):
-				start_match = re.search(r'silence_start: (\d+(?:\.\d+)?)', silence_lines[i])
-				end_match = re.search(r'silence_end: (\d+\.\d+)', silence_lines[i + 1])
-
-				if start_match and end_match:
-					start = float(start_match.group(1))
-					end = float(end_match.group(1))
-					duration = end - start
-					silence_periods.append({
-						"start": start,
-						"end": end,
-						"duration": duration
-					})
-			if silence_periods:
-				return silence_periods, threshold
-
-		threshold += 2
-
-	return [], threshold
-
 
 def get_silences(req, video_id): 
 	try:
@@ -234,11 +145,6 @@ def delete_description(req, video_id, description_id):
 	except Exception as e:
 		print(f"Error: {e}")
 		return JsonResponse({'error': str(e)}, status=500)
-
-from django.views.decorators.csrf import csrf_exempt
-from django.http import JsonResponse
-from datetime import timedelta
-import json
 
 @csrf_exempt
 def update_time_description(req, video_id, description_id):
@@ -332,6 +238,43 @@ def add_description(req, video_id):
 			return JsonResponse({'error': str(e)}, status=500)
 	return JsonResponse({'error': 'Invalid request method'}, status=405)
 
+@csrf_exempt
+def add_audio_description(req, video_id, description_id):
+	if req.method == 'POST':
+		try:
+			description = Description.objects.get(id=description_id, video_id=video_id)
+			audio_blob = req.FILES['audio']
+			file_name, file_type = os.path.splitext(audio_blob.name)
+			audio_blob.name = file_name + f'_{description_id}' + file_type
+
+			description.audio_file.save(audio_blob.name, audio_blob)
+
+			return JsonResponse({'message': 'Audio description updated successfully'}, status=200)
+
+		except Video.DoesNotExist:
+			return JsonResponse({'error': 'Video not found'}, status=404)
+		except Exception as e:
+			print(f"Error: {e}")
+			return JsonResponse({'error': str(e)}, status=500)
+		
+def get_audio_description(req, video_id, description_id):
+    try:
+        description = Description.objects.get(id=description_id, video_id=video_id)
+
+        audio_url = description.audio_file.url if description.audio_file else None
+
+        return JsonResponse({
+            'description_id': description.id,
+            'audio_file': audio_url,
+            'text': description.description,
+        })
+
+    except Description.DoesNotExist:
+        return JsonResponse({'error': 'Description not found'}, status=404)
+    except Exception as e:
+        print(f"Error: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
 def get_video_stats(req, video_id):
 	video = Video.objects.filter(id=video_id).first()
 
@@ -340,8 +283,6 @@ def get_video_stats(req, video_id):
 	option_selected = video.option_selected if video else "Unknown Option"
 	threhold_selected = video.threshold_selected if video else "Unknown Threshold"
 	threshold_value = video.threshold_value if video else "Unknown Threshold Value"
-	lang = video.lang if video else "Unknown Language"
-	tone = video.tone if video else "Unknown Tone"
 	voice_id = video.voice_id if video else "Unknown Voice ID"
 	audio_url = video.audio_file.url if video and video.audio_file else None
 	descriptions = Description.objects.filter(video=video) if video else []
@@ -362,33 +303,20 @@ def get_video_stats(req, video_id):
 				'description': desc.description
 			} for desc in descriptions
 		],
-		'lang': lang,
-		'tone': tone,
 		'voice_id': voice_id,
 		'audio_url': audio_url
 	}
 
 	return JsonResponse(stats, status=200)
 
-def read_video_pyav(container, indices, size=(336, 336)):
-	frames = []
-	container.seek(0)
-	start_index = indices[0]
-	end_index = indices[-1]
-	for i, frame in enumerate(container.decode(video=0)):
-		if i > end_index:
-			break
-		if i >= start_index and i in indices:
-			img = frame.to_ndarray(format="rgb24")
-			img = cv2.resize(img, size)
-			frames.append(img)
-	return np.stack(frames)
+
+from .llava_description import open_container, generate_description
 
 def generate_descriptions(req, video_id):
 	try:
 		video = Video.objects.get(id=video_id)
 		descriptions = Description.objects.filter(video=video)
-		container = av.open(video.video_file)
+		container = open_container(video.video_file)
 		stream = container.streams.video[0]
 		fps = float(stream.average_rate)
 
@@ -399,25 +327,7 @@ def generate_descriptions(req, video_id):
 			end_frame = int(end_sec * fps)
 			indices = np.linspace(start_frame, end_frame, num=8).astype(int)
 
-			clip = read_video_pyav(container, indices, size=(336, 336))  # resized
-			conversation = [{
-				"role": "user",
-				"content": [
-					{"type": "text", "text": f"Describe brevemente qué se muestra visualmente en este segmento del video ({start_sec:.1f}s a {end_sec:.1f}s), en español. Usa una sola frase corta."},
-					{"type": "video"}
-				],
-			}]
-
-			prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-			inputs = processor(text=prompt, videos=clip, padding=True, return_tensors="pt").to(model.device)
-
-			output = model.generate(**inputs, max_new_tokens=1000, do_sample=False)
-			text = processor.decode(output[0], skip_special_tokens=True)
-			
-			if "ASSISTANT:" in text:
-				text = text.split("ASSISTANT:")[-1].strip()
-
-			text = text.split("\n")[0].strip()
+			text = generate_description(container, indices, start_sec, end_sec)
 
 			desc.description = text
 			desc.save()
@@ -446,22 +356,25 @@ def add_descriptions_to_video(req, video_id):
         adelay_filters = ""
         amix_inputs = ""
 
-        # 1. Síntesis de cada descripción
         for i, desc in enumerate(descriptions):
             audio_filename = f"desc_{desc.id}.mp3"
             audio_path = os.path.join(video_folder, audio_filename)
             start_ms = int(desc.start_at.total_seconds() * 1000)
 
+            # 1. Generar audio con TTS
             synthesize_description_to_audio(desc.description, voice_id, audio_path)
 
+            # 2. Preparar entradas para FFmpeg
             audio_paths.append(audio_path)
             input_files += f'-i "{audio_path}" '
             adelay_filters += f"[{i}:a]adelay={start_ms}|{start_ms}[a{i}];"
             amix_inputs += f"[a{i}]"
 
-        # 2. Generar narración final
-        final_audio_path = os.path.join(video_folder, f"{video.title}_narration.mp3")
-        final_video_path = os.path.join(video_folder, f"{video.title}_with_audio.mp4")
+        # 3. Crear archivo de narración
+        final_audio_filename = f"{video.title}_narration.mp3"
+        final_video_filename = f"{video.title}_with_audio.mp4"
+        final_audio_path = os.path.join(video_folder, final_audio_filename)
+        final_video_path = os.path.join(video_folder, final_video_filename)
 
         filter_complex = f'{adelay_filters} {amix_inputs}amix=inputs={len(descriptions)}[aout]'
 
@@ -471,24 +384,40 @@ def add_descriptions_to_video(req, video_id):
 
         audio_result = subprocess.run(cmd_audio, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if audio_result.returncode != 0:
-            return JsonResponse({'error': 'Failed to generate audio narration', 'details': audio_result.stderr.decode()}, status=500)
+            return JsonResponse({
+                'error': 'Failed to generate audio narration',
+                'details': audio_result.stderr.decode()
+            }, status=500)
 
-        # 3. Reemplazar audio original por narración
+        # 4. Reemplazar el audio del video original por el generado
         cmd_video = f'''
         ffmpeg -i "{video.video_file.path}" -i "{final_audio_path}" -c:v copy -map 0:v:0 -map 1:a:0 -shortest -y "{final_video_path}"
         '''
 
         video_result = subprocess.run(cmd_video, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if video_result.returncode != 0:
-            return JsonResponse({'error': 'Failed to combine video with audio', 'details': video_result.stderr.decode()}, status=500)
+            return JsonResponse({
+                'error': 'Failed to combine video with audio',
+                'details': video_result.stderr.decode()
+            }, status=500)
 
-        # 4. Limpieza
+        # 5. Convertir a rutas relativas para almacenar en FileFields
+        rel_video_path = os.path.relpath(final_video_path, settings.MEDIA_ROOT)
+        rel_audio_path = os.path.relpath(final_audio_path, settings.MEDIA_ROOT)
+
+        video.modified_video_file.name = rel_video_path
+        video.modified_audio_file.name = rel_audio_path
+        video.modified = True
+        video.modified_at = video.modified_at or video.created_at
+        video.save()
+
+        # 6. Limpiar archivos temporales
         for path in audio_paths:
             os.remove(path)
 
         return JsonResponse({
             'message': 'Narration added to video successfully',
-            'final_video': final_video_path
+            'final_video': video.modified_video_file.url
         }, status=200)
 
     except Video.DoesNotExist:
@@ -496,3 +425,60 @@ def add_descriptions_to_video(req, video_id):
     except Exception as e:
         print(f"Error: {e}")
         return JsonResponse({'error': str(e)}, status=500)
+	
+def format_vtt_timestamp(td):
+	total_seconds = int(td.total_seconds())
+	milliseconds = int((td.total_seconds() - total_seconds) * 1000)
+	hours = total_seconds // 3600
+	minutes = (total_seconds % 3600) // 60
+	seconds = total_seconds % 60
+	return f"{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}"
+
+def generate_webvtt_from_descriptions(descriptions, video_id, folder):
+	webvtt_content = "WEBVTT\n\n"
+	for desc in descriptions:
+		start = format_vtt_timestamp(desc.start_at)
+		end = format_vtt_timestamp(desc.end_at)
+		webvtt_content += f"{start} --> {end}\n{desc.description.strip()}\n\n"
+
+	webvtt_filename = f"video_{video_id}_descriptions.vtt"
+	webvtt_path = os.path.join(folder, webvtt_filename)
+
+	with open(webvtt_path, 'w', encoding='utf-8') as f:
+		f.write(webvtt_content)
+
+	return webvtt_path
+
+def get_modified_video(req, video_id):
+	try:
+		video = Video.objects.get(id=video_id)
+
+		if not video.modified or not video.modified_video_file:
+			return JsonResponse({'error': 'Video has not been modified yet'}, status=404)
+
+		# Generar WebVTT si no existe
+		if not video.web_vtt_file:
+			descriptions = Description.objects.filter(video=video)
+			if not descriptions.exists():
+				return JsonResponse({'error': 'No descriptions to generate WebVTT'}, status=404)
+
+			video_folder = os.path.dirname(video.video_file.path)
+			webvtt_path = generate_webvtt_from_descriptions(descriptions, video_id, video_folder)
+
+			# Guardar ruta relativa
+			relative_path = os.path.relpath(webvtt_path, settings.MEDIA_ROOT)
+			video.web_vtt_file.name = relative_path
+			video.save()
+
+		return JsonResponse({
+			'video_id': video.id,
+			'video_file_url': req.build_absolute_uri(video.modified_video_file.url),
+			'audio_file_url': req.build_absolute_uri(video.modified_audio_file.url) if video.modified_audio_file else None,
+			'web_vtt_file_url': req.build_absolute_uri(video.web_vtt_file.url) if video.web_vtt_file else None
+		}, status=200)
+
+	except Video.DoesNotExist:
+		return JsonResponse({'error': 'Video not found'}, status=404)
+	except Exception as e:
+		print(f"Error: {e}")
+		return JsonResponse({'error': str(e)}, status=500)

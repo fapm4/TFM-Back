@@ -15,4 +15,9 @@ urlpatterns = [
 
     path('generate_descriptions/<int:video_id>/', views.generate_descriptions, name='generate_descriptions'),
     path('add_descriptions_to_video/<int:video_id>/', views.add_descriptions_to_video, name='add_descriptions_to_video'),
+
+    path('get_modified_video/<int:video_id>/', views.get_modified_video, name='get_modified_video'),
+
+    path('add_audio_description/<int:video_id>/<int:description_id>/', views.add_audio_description, name='add_audio_description'),
+    path('get_audio_description/<int:video_id>/<int:description_id>/', views.get_audio_description, name='get_audio_description')
 ]
