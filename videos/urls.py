@@ -19,5 +19,7 @@ urlpatterns = [
     path('get_modified_video/<int:video_id>/', views.get_modified_video, name='get_modified_video'),
 
     path('add_audio_description/<int:video_id>/<int:description_id>/', views.add_audio_description, name='add_audio_description'),
-    path('get_audio_description/<int:video_id>/<int:description_id>/', views.get_audio_description, name='get_audio_description')
+    path('get_audio_description/<int:video_id>/<int:description_id>/', views.get_audio_description, name='get_audio_description'),
+
+    path('upload_vtt/<int:video_id>/', views.upload_vtt, name='upload_vtt')
 ]

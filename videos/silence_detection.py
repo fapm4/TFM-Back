@@ -32,7 +32,7 @@ def get_mean_volume(audio_path):
 		
 	return None
 
-def detect_silences(audio_path, threshold=None, max_attempts=5):
+def detect_silences(audio_path, threshold=None, max_attempts=10):
 	# Si no hay umbral, lo calculamos como media - 10
 	mean_db = get_mean_volume(audio_path)
 	if threshold is None:

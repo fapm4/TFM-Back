@@ -42,6 +42,7 @@ class Description(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     source = models.CharField(max_length=100, default='')
     audio_file = models.FileField(upload_to=description_audio_upload_to, blank=True, null=True)
+    real_audio_duration = models.DurationField(null=True, blank=True)
 
     def __str__(self):
         return f"Description for {self.video.title} from {self.start_at} to {self.end_at}"
